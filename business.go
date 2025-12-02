@@ -3,6 +3,7 @@ package main
 import "context"
 
 type BusinessServer struct {
+	// dummy for admin log server
 	UnimplementedBizServer
 }
 

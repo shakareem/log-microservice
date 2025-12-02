@@ -51,6 +51,7 @@ func StartMyMicroservice(ctx context.Context, addr string, acl string) error {
 
 		s := grpc.NewServer(
 			grpc.UnaryInterceptor(RPCServer.authUnaryInterceptor),
+			grpc.StreamInterceptor(RPCServer.authStreamInterceptor),
 		)
 
 		RegisterAdminServer(s, RPCServer)
@@ -79,33 +80,48 @@ func (s *RPCServer) authUnaryInterceptor(
 	info *grpc.UnaryServerInfo,
 	handler grpc.UnaryHandler,
 ) (any, error) {
+	if err := s.checkMethod(ctx, info.FullMethod); err != nil {
+		return nil, err
+	}
+	return handler(ctx, req)
+}
+
+func (s *RPCServer) authStreamInterceptor(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	if err := s.checkMethod(ss.Context(), info.FullMethod); err != nil {
+		return err
+	}
+	return handler(srv, ss)
+}
+
+func (s *RPCServer) checkMethod(ctx context.Context, method string) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 
 	values := md.Get("consumer")
 	if len(values) == 0 {
-		return nil, ErrUnauthenticated
+		return ErrUnauthenticated
 	}
 
-	methods, ok := s.ACL[values[0]]
-	if !ok || !methodIsAllowed(methods, info.FullMethod) {
-		return nil, ErrUnauthenticated
+	allowedMethods, ok := s.ACL[values[0]]
+	if !ok {
+		return ErrUnauthenticated
 	}
 
-	return handler(ctx, req)
-}
-
-func methodIsAllowed(allowedMethods []string, method string) bool {
 	if slices.Contains(allowedMethods, method) {
-		return true
+		return nil
 	}
 
 	service := strings.Split(method, "/")[1]
 	for _, m := range allowedMethods {
 		serviceAndMethod := strings.Split(m, "/")
 		if serviceAndMethod[1] == service && serviceAndMethod[2] == "*" {
-			return true
+			return nil
 		}
 	}
 
-	return false
+	return ErrUnauthenticated
 }
