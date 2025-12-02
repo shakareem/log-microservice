@@ -21,7 +21,8 @@ type RPCServer struct {
 	UnimplementedAdminServer
 	UnimplementedBizServer
 
-	ACL        map[string][]string
+	ACL map[string][]string
+
 	eventChans []chan *Event
 	mu         *sync.Mutex
 }
@@ -179,13 +180,15 @@ func (s *RPCServer) sendLog(ctx context.Context, method string) {
 		Host:      p.Addr.String(),
 	}
 
+	s.mu.Lock()
 	for _, ch := range s.eventChans {
 		ch <- event
 	}
+	s.mu.Unlock()
 }
 
 func (s *RPCServer) Logging(_ *Nothing, stream Admin_LoggingServer) error {
-	ch := s.addLogger()
+	ch := s.addEventListener()
 	for {
 		select {
 		case event := <-ch:
@@ -199,7 +202,7 @@ func (s *RPCServer) Logging(_ *Nothing, stream Admin_LoggingServer) error {
 	}
 }
 
-func (s *RPCServer) addLogger() <-chan *Event {
+func (s *RPCServer) addEventListener() <-chan *Event {
 	ch := make(chan *Event, 100)
 
 	s.mu.Lock()
@@ -210,6 +213,30 @@ func (s *RPCServer) addLogger() <-chan *Event {
 }
 
 func (s *RPCServer) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
-	// TODO
-	return nil
+
+	methodStat, consumerStat := map[string]uint64{}, map[string]uint64{}
+
+	events := s.addEventListener()
+	ticker := time.NewTicker(time.Duration(interval.IntervalSeconds) * time.Second)
+
+	for {
+		select {
+		case event := <-events:
+			methodStat[event.Method]++
+			consumerStat[event.Consumer]++
+		case t := <-ticker.C:
+			err := stream.Send(&Stat{
+				Timestamp:  t.Unix(),
+				ByMethod:   methodStat,
+				ByConsumer: consumerStat,
+			})
+			if err != nil {
+				return err
+			}
+
+			methodStat, consumerStat = map[string]uint64{}, map[string]uint64{}
+		case <-stream.Context().Done():
+			return nil
+		}
+	}
 }
