@@ -6,20 +6,24 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
 // ACL stores list of available rpc methods for each consumer
 type RPCServer struct {
-	AdminLogServer
-	BusinessServer
+	UnimplementedAdminServer
+	UnimplementedBizServer
 
-	ACL map[string][]string
-	// мб хранить тут список тех кому надо отправлять логи
+	ACL        map[string][]string
+	eventChans []chan *Event
+	mu         *sync.Mutex
 }
 
 var ErrUnauthenticated = status.Error(
@@ -27,11 +31,23 @@ var ErrUnauthenticated = status.Error(
 	"no cosumer metadata in rpc request or method not allowed",
 )
 
+func (s *RPCServer) Add(context.Context, *Nothing) (*Nothing, error) {
+	return &Nothing{}, nil
+}
+
+func (s *RPCServer) Check(context.Context, *Nothing) (*Nothing, error) {
+	return &Nothing{}, nil
+}
+
+func (s *RPCServer) Test(context.Context, *Nothing) (*Nothing, error) {
+	return &Nothing{}, nil
+}
+
 func NewRPCServer(ACL map[string][]string) *RPCServer {
 	return &RPCServer{
-		AdminLogServer: AdminLogServer{},
-		BusinessServer: BusinessServer{},
-		ACL:            ACL,
+		ACL:        ACL,
+		eventChans: []chan *Event{},
+		mu:         &sync.Mutex{},
 	}
 }
 
@@ -50,8 +66,14 @@ func StartMyMicroservice(ctx context.Context, addr string, acl string) error {
 		RPCServer := NewRPCServer(ACL)
 
 		s := grpc.NewServer(
-			grpc.UnaryInterceptor(RPCServer.authUnaryInterceptor),
-			grpc.StreamInterceptor(RPCServer.authStreamInterceptor),
+			grpc.ChainUnaryInterceptor(
+				RPCServer.authUnaryInterceptor,
+				RPCServer.logUnaryInterceptor,
+			),
+			grpc.ChainStreamInterceptor(
+				RPCServer.authStreamInterceptor,
+				RPCServer.logStreamInterceptor,
+			),
 		)
 
 		RegisterAdminServer(s, RPCServer)
@@ -124,4 +146,70 @@ func (s *RPCServer) checkMethod(ctx context.Context, method string) error {
 	}
 
 	return ErrUnauthenticated
+}
+
+func (s *RPCServer) logUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	s.sendLog(ctx, info.FullMethod)
+	return handler(ctx, req)
+}
+
+func (s *RPCServer) logStreamInterceptor(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	s.sendLog(ss.Context(), info.FullMethod)
+	return handler(srv, ss)
+}
+
+func (s *RPCServer) sendLog(ctx context.Context, method string) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	p, _ := peer.FromContext(ctx)
+
+	event := &Event{
+		Timestamp: time.Now().Unix(),
+		Consumer:  md.Get("consumer")[0],
+		Method:    method,
+		Host:      p.Addr.String(),
+	}
+
+	for _, ch := range s.eventChans {
+		ch <- event
+	}
+}
+
+func (s *RPCServer) Logging(_ *Nothing, stream Admin_LoggingServer) error {
+	ch := s.addLogger()
+	for {
+		select {
+		case event := <-ch:
+			err := stream.Send(event)
+			if err != nil {
+				return err
+			}
+		case <-stream.Context().Done():
+			return nil
+		}
+	}
+}
+
+func (s *RPCServer) addLogger() <-chan *Event {
+	ch := make(chan *Event, 100)
+
+	s.mu.Lock()
+	s.eventChans = append(s.eventChans, ch)
+	s.mu.Unlock()
+
+	return ch
+}
+
+func (s *RPCServer) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
+	// TODO
+	return nil
 }

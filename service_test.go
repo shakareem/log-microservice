@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
 	"runtime"
 	"strings"
@@ -66,13 +67,11 @@ func TestServerStartStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cant start server initial: %v", err)
 	}
-	println(1)
 
 	wait(1)
 	finish() // При вызове этой функции ваш сервер должен остановиться и освободить порт
 	wait(1)
 
-	println(2)
 	// Теперь проверим, что вы освободили порт и мы можем стартовать сервер ещё раз
 	ctx, finish = context.WithCancel(context.Background())
 	err = StartMyMicroservice(ctx, listenAddr, ACLData)
@@ -80,13 +79,9 @@ func TestServerStartStop(t *testing.T) {
 		t.Fatalf("cant start server again: %v", err)
 	}
 
-	println(3)
-
 	wait(1)
 	finish()
 	wait(1)
-
-	println(4)
 }
 
 // У вас наверняка будет что-то выполняться в отдельных горутинах.
@@ -229,7 +224,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 4; i++ {
 			evt, errTmp := logStream1.Recv()
-			// log.Println("logger 1", evt, errTmp)
+			log.Println("logger 1", evt, errTmp)
 			if errTmp != nil {
 				t.Errorf("unexpected error: %v, awaiting Event", errTmp)
 				return
@@ -248,7 +243,7 @@ func TestLogging(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < 3; i++ {
 			evt, errTmp := logStream2.Recv()
-			// log.Println("logger 2", evt, errTmp)
+			log.Println("logger 2", evt, errTmp)
 			if errTmp != nil {
 				t.Errorf("unexpected error: %v, awaiting Event", errTmp)
 				return
@@ -284,6 +279,7 @@ func TestLogging(t *testing.T) {
 
 	wg.Wait()
 
+	log.Println("finish")
 	expectedLogData1 := []*Event{
 		{Consumer: "logger", Method: "/main.Admin/Logging"},
 		{Consumer: "biz_user", Method: "/main.Biz/Check"},
