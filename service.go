@@ -3,18 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net"
 	"slices"
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
-
-type BusinessServer struct {
-	UnimplementedBizServer
-}
 
 // ACL stores list of available rpc methods for each consumer
 type RPCServer struct {
@@ -25,7 +22,10 @@ type RPCServer struct {
 	// мб хранить тут список тех кому надо отправлять логи
 }
 
-var ErrUnauthorized = errors.New("unauthorized: no cosumer metadata in rpc request")
+var ErrUnauthenticated = status.Error(
+	codes.Unauthenticated,
+	"no cosumer metadata in rpc request or method not allowed",
+)
 
 func NewRPCServer(ACL map[string][]string) *RPCServer {
 	return &RPCServer{
@@ -83,12 +83,12 @@ func (s *RPCServer) authUnaryInterceptor(
 
 	values := md.Get("consumer")
 	if len(values) == 0 {
-		return nil, ErrUnauthorized
+		return nil, ErrUnauthenticated
 	}
 
 	methods, ok := s.ACL[values[0]]
 	if !ok || !methodIsAllowed(methods, info.FullMethod) {
-		return nil, ErrUnauthorized
+		return nil, ErrUnauthenticated
 	}
 
 	return handler(ctx, req)
@@ -99,10 +99,10 @@ func methodIsAllowed(allowedMethods []string, method string) bool {
 		return true
 	}
 
-	service := strings.Split(method, "/")[0]
+	service := strings.Split(method, "/")[1]
 	for _, m := range allowedMethods {
 		serviceAndMethod := strings.Split(m, "/")
-		if serviceAndMethod[0] == service && serviceAndMethod[1] == "*" {
+		if serviceAndMethod[1] == service && serviceAndMethod[2] == "*" {
 			return true
 		}
 	}
